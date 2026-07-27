@@ -67,13 +67,17 @@ for ((i = 0; i < F; i++)); do BAR+='█'; done
 for ((i = F; i < 10; i++)); do BAR+='░'; done
 
 # ── Git info (direct; --no-optional-locks keeps it read-only/fast) ──
-BR="" FC=0 AD=0 DL=0
+BR="" FC=0 AD=0 DL=0 AH=0 BH=0
 if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
   BR=$(git -C "$DIR" --no-optional-locks branch --show-current 2>/dev/null)
   while IFS=$'\t' read -r a d _; do
     [[ "$a" =~ ^[0-9]+$ ]] || continue
     FC=$((FC + 1)); AD=$((AD + a)); DL=$((DL + d))
   done < <(git -C "$DIR" --no-optional-locks diff HEAD --numstat 2>/dev/null)
+  # Ahead/behind vs upstream (left=behind, right=ahead); empty if no upstream.
+  IFS=$'\t' read -r _bh _ah < <(git -C "$DIR" --no-optional-locks rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
+  [[ "$_bh" =~ ^[0-9]+$ ]] && BH=$_bh
+  [[ "$_ah" =~ ^[0-9]+$ ]] && AH=$_ah
 fi
 
 # ── Project name + line 1 right section ──
@@ -86,6 +90,8 @@ L1R="$PN"
 if [ -n "$BR" ]; then
   ((${#BR} > 35)) && BR="${BR:0:35}…"
   L1R+=" ${P}${GBR} ${BR}${N}"
+  ((AH > 0)) 2>/dev/null && L1R+=" ${G}↑${AH}${N}"
+  ((BH > 0)) 2>/dev/null && L1R+=" ${Y}↓${BH}${N}"
   ((FC > 0)) 2>/dev/null && L1R+=" ${FC}f ${G}+${AD}${N} ${R}-${DL}${N}"
 elif [[ "$IS_WT" == "1" ]]; then
   L1R="${_REPO}/${_WT_NAME}"; ((${#L1R} > 25)) && L1R="${L1R:0:25}…"
