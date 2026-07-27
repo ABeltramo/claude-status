@@ -6,16 +6,8 @@ It's a single Bash script. No plugin, no marketplace, no daemon.
 
 ```
 Opus 4.8 (1M) medium    |  claude-status (main) 2f +14 -3
-██░░░░░░░░ 21% 1M        |  💰 $209/$500 41% ⇣46% · 1d $4 · 7d $61
+██░░░░░░░░ 21% 1M       |  💰 $209/$500 41% ⇣46% · 1d $4 · 7d $61
 ```
-
-## Why
-
-Claude Code's built-in 5h/7d rate-limit display only works on **subscription (Pro/Max)** accounts. If you run through **Vertex AI, Bedrock, or an enterprise API key**, there are no subscription windows — and the transcripts store `costUSD: null`. But the **token counts are all there**, so cost is fully recoverable.
-
-claude-status computes cost from those token counts using [`ccusage`](https://github.com/ryoppippi/ccusage) (`--mode calculate`, public list prices), aggregated across **all** your sessions, and tracks it against a cap you set (e.g. a `$500/month` company soft-cap).
-
-> ⚠️ **It's an estimate, not your invoice.** ccusage uses Anthropic's public list prices; a Vertex/Bedrock/enterprise bill may use different (negotiated) rates. Treat it as a directional gauge — cross-check once against your provider's billing console to learn your personal fudge factor.
 
 ## What it shows
 
@@ -41,7 +33,7 @@ claude-status computes cost from those token counts using [`ccusage`](https://gi
 ## Install
 
 ```sh
-git clone https://github.com/<you>/claude-status.git
+git clone https://github.com/abeltramo/claude-status.git
 cd claude-status
 ./install.sh
 ```
