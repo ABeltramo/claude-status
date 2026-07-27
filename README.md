@@ -50,6 +50,14 @@ cd claude-status
 
 Then **restart Claude Code** (or start a new session).
 
+### Develop against the repo (symlink)
+
+If you keep the clone around, use `--link` to symlink instead of copy, so edits to the repo file are live immediately (one source of truth):
+
+```sh
+./install.sh --link
+```
+
 ### Manual install
 
 Copy the script and wire it up yourself:
