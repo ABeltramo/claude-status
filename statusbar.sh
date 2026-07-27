@@ -21,12 +21,14 @@ export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # ── Colors ──
 C=$'\033[36m' G=$'\033[32m' Y=$'\033[33m' R=$'\033[31m' D=$'\033[2m' N=$'\033[0m'
 P=$'\033[35m'   # magenta (git branch)
+GLD=$'\033[38;5;220m'   # gold (credit-card glyph)
 NOW=$(date +%s)
 
 # ── Nerd Font icons (Hack Nerd Font Mono). Built from UTF-8 octal bytes so this
 #    works even on macOS's stock bash 3.2, which lacks $'\uXXXX'. ──
 GBR=$(printf '\356\202\240')   #  U+E0A0 git branch (powerline)
 GCX=$(printf '\357\203\244')   #  U+F0E4 gauge, before the context bar
+GMN=$(printf '\357\202\235')   #  U+F09D money (nf-fa-credit-card), before the costs
 
 # ── Parse stdin + settings in one jq call ──
 _SETTINGS=$(cat "$HOME/.claude/settings.json" 2>/dev/null)
@@ -132,8 +134,8 @@ if [ -n "$CD" ]; then
   if [ -f "$CACHE" ]; then
     read -r _M _W _T < <(jq -r '"\(.month // 0) \(.week // 0) \(.today // 0)"' "$CACHE" 2>/dev/null)
     [[ "$_M" =~ ^[0-9.]+$ ]] && { MO=$(printf '%.0f' "$_M"); COST_OK=1; }
-    [[ "$_W" =~ ^[0-9.]+$ ]] && WK=$(printf '%.2f' "$_W")
-    [[ "$_T" =~ ^[0-9.]+$ ]] && TD=$(printf '%.2f' "$_T")
+    [[ "$_W" =~ ^[0-9.]+$ ]] && WK=$(printf '%.0f' "$_W")
+    [[ "$_T" =~ ^[0-9.]+$ ]] && TD=$(printf '%.0f' "$_T")
     ((COST_OK)) && COST_PCT=$(awk -v m="$_M" -v c="$CAP" 'BEGIN{ if(c<=0){print 0} else {printf "%d", (m*100/c)} }')
   fi
 fi
@@ -144,8 +146,8 @@ if ((COST_PCT >= 90)); then CCOL=$R; elif ((COST_PCT >= 70)); then CCOL=$Y; else
 # ── Current session cost: Claude Code's own tally from stdin
 #    (cost.total_cost_usd) — exact, matches /usage, and populated even on
 #    Vertex where transcripts carry no per-message cost. ──
-SESS="0.00"
-[[ "$CCOST" =~ ^[0-9]+(\.[0-9]+)?$ ]] && SESS=$(printf '%.2f' "$CCOST")
+SESS="0"
+[[ "$CCOST" =~ ^[0-9]+(\.[0-9]+)?$ ]] && SESS=$(printf '%.0f' "$CCOST")
 
 # ── Bordered panel (REPO / STATS) ──
 BD=$'\033[37m'   # border + title color (plain white)
@@ -156,17 +158,17 @@ ROW_REPO="$L1R"
 # STATS: model + effort │ context bar + percentage + size │ costs.
 [ -n "$CL" ] && CTX_OF="of ${CL}" || CTX_OF=""
 if ((COST_OK)); then
-  COST="💰 \$${SESS} ${D}·${N} 1d \$${TD} ${D}·${N} 7d \$${WK} ${D}·${N} ${CCOL}\$${MO}${N}${D}/\$${CAP}${N}"
+  COST="${GLD}${GMN}${N} \$${SESS} ${D}·${N} 1d \$${TD} ${D}·${N} 7d \$${WK} ${D}·${N} ${CCOL}\$${MO}${N}${D}/\$${CAP}${N}"
 else
-  COST="💰 \$${SESS} ${D}· computing…${N}"
+  COST="${GLD}${GMN}${N} \$${SESS} ${D}· computing…${N}"
 fi
 ROW_STATS="${MODEL} ${EF} ${D}│${N} ${BC}${GCX} ${BAR}${N} ${PCT}% ${CTX_OF} ${D}│${N} ${COST}"
 
-# Visible display width: strip ANSI (via sed — bash glob mangles multibyte),
-# then count 💰 as 2 columns (every other glyph we use is single-width).
+# Visible display width: strip ANSI (via sed — bash glob mangles multibyte).
+# Every glyph we use (Nerd Font PUA icons, box-drawing, middle dot) is
+# single-width and renders as one cell across terminals — no special cases.
 _ESC=$(printf '\033')
-vw(){ local s t; s=$(printf '%s' "$1" | sed "s/${_ESC}\[[0-9;]*m//g"); t=${s//💰/}
-  echo $(( ${#s} + ${#s} - ${#t} )); }
+vw(){ local s; s=$(printf '%s' "$1" | sed "s/${_ESC}\[[0-9;]*m//g"); echo "${#s}"; }
 
 # Inner width = widest row content + 2 (one padding space each side).
 CW=0
