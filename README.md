@@ -1,33 +1,41 @@
 # claude-status
 
-A tiny, self-contained [Claude Code](https://claude.com/claude-code) statusline that shows your model/context on line 1 and — crucially — your **spend against a monthly cap** on line 2, including **today** and the **rolling 7-day** total.
+A tiny, self-contained [Claude Code](https://claude.com/claude-code) statusline that renders a **bordered two-section panel**: your repo/branch on top, and your model, context usage, and **spend** — this session, today, the rolling 7-day total, and the month against a cap — below.
 
 It's a single Bash script. No plugin, no marketplace, no daemon.
 
 ```
-Opus 4.8 (1M) medium    |  claude-status (main) 2f +14 -3
-██░░░░░░░░ 21% 1M       |  💰 $209/$500 41% ⇣46% · 1d $4 · 7d $61
+╭─ REPO ────────────────────────────────────────────────────────────────────╮
+│ claude-status  main 2f +55 -31                                            │
+├─ SESSION ──────────────────────────────────────────────────────────────────┤
+│ Opus 4.8 (1M) medium │  ██░░░░░░░░ 22% of 1M │ 💰 $12.87 · 1d $19.77 · 7d $76.00 · $225/$500 │
+╰────────────────────────────────────────────────────────────────────────────╯
 ```
+
+The panel auto-sizes to its widest row, so every line and border stays aligned. Borders and section titles are plain white; the `` and `` are [Nerd Font](https://www.nerdfonts.com/) icons.
 
 ## What it shows
 
-**Line 1** — `model (context) effort | project (branch) Nf +A -D`
-- Model name + context-window size, current effort level (from the session or `effortLevel` in settings)
-- Project name, git branch, and diff stats (`N` files, `+` added / `-` deleted lines). Worktree-aware.
+**`REPO`** — `<folder>  <branch> Nf +A -D`
+- Project folder name
+- Git branch (magenta, with a `` branch icon) and diff stats: `N` files, `+` added / `-` deleted lines. Worktree-aware.
+- When not in a git repo, just the folder name.
 
-**Line 2** — `context-bar PCT% CTX | 💰 $month/$cap pct% pace · 1d $today · 7d $week`
-- Context-usage bar, color-coded (green <70%, yellow ≥70%, red ≥90%)
-- `$month/$cap` — this calendar month's spend vs your cap (colored by % of cap)
-- `pct%` — percent of cap used
-- `pace` — `⇡N%` over pace (red, overspending) / `⇣N%` under pace (green, surplus), vs how far through the month you are
-- `1d $today` — today's spend so far
-- `7d $week` — rolling 7-day spend
+**`SESSION`** — `model (context) effort │ <gauge> context-bar PCT% of CTX │ 💰 …`
+- Model name + context-window size, and current effort level (from the session, or `effortLevel` in settings)
+- A `` gauge + context-usage bar, color-coded green <70% / yellow ≥70% / red ≥90%, with `PCT% of <size>`
+- **Cost**, left to right:
+  - `💰 $session` — this session's spend (Claude Code's own tally; exact, matches `/usage`)
+  - `1d $today` — today's spend so far
+  - `7d $week` — rolling 7-day spend
+  - `$month/$cap` — this calendar month's spend vs your cap, colored by % of cap
 
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code)
+- A [Nerd Font](https://www.nerdfonts.com/) in your terminal (e.g. **Hack Nerd Font Mono**) for the branch/gauge icons
 - [`jq`](https://jqlang.github.io/jq/) — `brew install jq` / `apt install jq`
-- [`bun`](https://bun.sh) (for `bunx`) **or** Node.js (for `npx`) — used to run `ccusage` on demand; nothing is installed globally
+- [`bun`](https://bun.sh) (for `bunx`) **or** Node.js (for `npx`) — used to run `ccusage` on demand for the 1d/7d/month figures; nothing is installed globally
 - Bash 3.2+ (macOS default is fine)
 
 ## Install
@@ -90,10 +98,13 @@ Example:
 
 ## How it works
 
-- On every render the script reads Claude Code's statusline JSON (stdin) + your `settings.json` in one `jq` call, draws line 1 and the context bar, and reads git status directly (`--no-optional-locks`, read-only).
-- Cost is **cached**. The script prints the last cached value instantly and, when the cache is older than ~10 min, kicks off a **background** `ccusage daily --mode calculate --json` refresh (rate-limited by an atomic `mkdir` lock so only one runs at a time). Rendering never blocks on `ccusage`.
+- On every render the script reads Claude Code's statusline JSON (stdin) + your `settings.json` in one `jq` call, then draws the bordered panel. Row widths are measured with ANSI stripped (via `sed`) so the box aligns even with colors, the money emoji, and Nerd Font glyphs.
+- **Session cost** comes straight from the stdin payload (`cost.total_cost_usd`) — Claude Code's own figure, so it's exact and matches `/usage`, with no price table to maintain. It's populated even on Vertex/Bedrock, where the raw transcripts carry no per-message cost.
+- **Today / 7-day / month** are **cached**. The script prints the last cached values instantly and, when the cache is older than ~10 min, kicks off a **background** `ccusage daily --mode calculate --json` refresh (rate-limited by an atomic `mkdir` lock so only one runs at a time). Rendering never blocks on `ccusage`. These figures aggregate across **all** sessions, which is why they use `ccusage` rather than the per-session stdin cost.
+- Cost is computed from token counts via `ccusage` (`--mode calculate`) using public list prices, so those figures are an **estimate**, not your invoice.
+- Git status is read directly (`--no-optional-locks`, read-only).
 - Cache lives in `${XDG_RUNTIME_DIR:-~/.cache}/claude-status/cost-cache.json` (user-owned dir only; never shared `/tmp`).
-- First render after install shows `💰 computing…` until the first background refresh lands.
+- First render after install shows `💰 $session · computing…` until the first background refresh lands.
 
 ## Uninstall
 
@@ -106,7 +117,7 @@ Or just delete the `statusLine` block from `~/.claude/settings.json`.
 
 ## Credit
 
-Line-1 layout and the context-bar/auto-compact logic are adapted from [claude-pace](https://github.com/Astro-Han/claude-pace). The cost-vs-cap tracking is the addition here.
+The context-bar/auto-compact logic and the idea of reading session cost from the stdin payload are adapted from [claude-pace](https://github.com/Astro-Han/claude-pace). The bordered panel, git/repo section, Nerd Font icons, and the today/7-day/month cost-vs-cap tracking are the additions here.
 
 ## License
 

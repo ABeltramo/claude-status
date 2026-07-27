@@ -1,3 +1,4 @@
 # nothing to build; keep the repo clean of local cruft
 .DS_Store
 *.tmp
+.idea/
