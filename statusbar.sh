@@ -127,9 +127,12 @@ if [ -n "$CD" ]; then
         today: ([.daily[]? | select(.period == $td)         | .totalCost] | add // 0),
         ts: $ts }' >"$CACHE.tmp" 2>/dev/null && mv "$CACHE.tmp" "$CACHE"
   }
-  if _stale "$CACHE" "$REFRESH" && _stale "$LOCK" "$LOCK_TTL" && mkdir "$LOCK" 2>/dev/null; then
-    ( _refresh; rmdir "$LOCK" 2>/dev/null ) >/dev/null 2>&1 &
-    disown 2>/dev/null || true
+  if _stale "$CACHE" "$REFRESH" && _stale "$LOCK" "$LOCK_TTL"; then
+    rmdir "$LOCK" 2>/dev/null   # reclaim a lock orphaned by a crashed/interrupted refresh
+    if mkdir "$LOCK" 2>/dev/null; then
+      ( _refresh; rmdir "$LOCK" 2>/dev/null ) >/dev/null 2>&1 &
+      disown 2>/dev/null || true
+    fi
   fi
   if [ -f "$CACHE" ]; then
     read -r _M _W _T < <(jq -r '"\(.month // 0) \(.week // 0) \(.today // 0)"' "$CACHE" 2>/dev/null)
