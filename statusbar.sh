@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # claude-status — self-contained Claude Code statusline (no external plugin).
 # Line 1: model (ctx) effort | project (branch) Nf +A -D
-# Line 2: bar PCT% CTX | 💰 $month/$cap pct% pace · 1d $today · 7d $week
+# Line 2: bar PCT% CTX | 💰 session $session · pi $month · claude $month · total $month/$cap
 #
-# Cost is COMPUTED from token counts via ccusage (--mode calculate), because on
-# Vertex/Bedrock/enterprise backends the transcripts carry no cost. It aggregates
-# ALL sessions' logs, is cached, and refreshes in the background so rendering is
-# instant. The figure uses public list prices → an ESTIMATE, not the invoice.
+# Claude cost is COMPUTED from token counts via ccusage (--mode calculate), because
+# some Claude backends do not include cost. Pi cost comes from Pi session records.
+# Both totals aggregate ALL available sessions, use a cache, and refresh in the
+# background so rendering is instant. The figures are estimates, not invoices.
 
 set -f
 input=$(cat)
 [ -z "$input" ] && { echo "Claude"; exit 0; }
 command -v jq >/dev/null || { echo "Claude [needs jq]"; exit 0; }
 
-CAP="${CLAUDE_MONTHLY_CAP:-500}"   # monthly soft cap in USD (override via env)
+CAP="${CLAUDE_MONTHLY_CAP:-300}"   # monthly soft cap in USD (override via env)
 REFRESH=600                        # seconds before the cost cache refreshes
 LOCK_TTL=180                       # min seconds between background refreshes
 export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -99,7 +99,7 @@ elif [[ "$IS_WT" == "1" ]]; then
   L1R="${_REPO}/${_WT_NAME}"; ((${#L1R} > 25)) && L1R="${L1R:0:25}…"
 fi
 
-# ── Cost cache (month / week / today), refreshed in the background ──
+# ── Cost cache (Pi and Claude month totals), refreshed in the background ──
 CD=""
 for BASE in "${XDG_RUNTIME_DIR:-}" "${HOME}/.cache"; do
   [ -n "$BASE" ] || continue
@@ -108,23 +108,46 @@ for BASE in "${XDG_RUNTIME_DIR:-}" "${HOME}/.cache"; do
   [ -d "$CAND" ] && [ -w "$CAND" ] || continue
   CD="$CAND"; break
 done
-CACHE="" MO="?" WK="?" TD="?" COST_PCT=0 COST_OK=0
+CACHE="" MO="?" PI_MO="?" COST_PCT=0 COST_OK=0 PI_COST_OK=0
+
+# Sum Pi usage recorded in the current calendar month.
+_pi_month() {
+  local base month file value values
+  base="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions"
+  [ -d "$base" ] || { printf '0'; return; }
+  month=$(date +%Y-%m)
+  values=""
+  while IFS= read -r -d '' file; do
+    value=$(jq -s -r --arg m "$month" '
+      [ .[] | select(.type != "session") | select(.timestamp | startswith($m))
+        | if .type == "message" then (.message.usage.cost.total // 0)
+          elif .type == "compaction" or .type == "branch_summary" then (.usage.cost.total // 0)
+          else 0 end ] | add // 0' "$file" 2>/dev/null) || \
+    value=$(sed '$d' "$file" | jq -s -r --arg m "$month" '
+      [ .[] | select(.type != "session") | select(.timestamp | startswith($m))
+        | if .type == "message" then (.message.usage.cost.total // 0)
+          elif .type == "compaction" or .type == "branch_summary" then (.usage.cost.total // 0)
+          else 0 end ] | add // 0' 2>/dev/null) || value=0
+    [[ "$value" =~ ^[0-9.eE+-]+$ ]] || value=0
+    values="${values}${value}"$'\n'
+  done < <(find "$base" -type f -name '*.jsonl' -print0 2>/dev/null)
+  printf '%s' "$values" | awk '{ total += $1 } END { printf "%.6f", total }'
+}
+
 if [ -n "$CD" ]; then
   CACHE="$CD/cost-cache.json"; LOCK="$CD/cost-cache.lock"
   _stale() { local f="$1" ttl="$2" mt; [ -f "$f" ] || return 0; mt=$(stat -f%m "$f" 2>/dev/null || stat -c%Y "$f" 2>/dev/null || echo 0); ((NOW - mt > ttl)); }
   _runner() { if command -v bunx >/dev/null 2>&1; then echo "bunx"; elif command -v npx >/dev/null 2>&1; then echo "npx --yes"; else return 1; fi; }
   _refresh() {
-    local run month cutoff today json
+    local run month json pi_month
     run=$(_runner) || return 1
     month=$(date +%Y-%m)
-    today=$(date +%Y-%m-%d)
-    cutoff=$(date -v-6d +%Y-%m-%d 2>/dev/null || date -d '6 days ago' +%Y-%m-%d 2>/dev/null)
     json=$($run ccusage@latest daily --mode calculate --json 2>/dev/null) || return 1
     [ -n "$json" ] || return 1
-    printf '%s' "$json" | jq -c --arg m "$month" --arg cut "$cutoff" --arg td "$today" --argjson ts "$NOW" '
+    pi_month=$(_pi_month)
+    printf '%s' "$json" | jq -c --arg m "$month" --argjson p "$pi_month" --argjson ts "$NOW" '
       { month: ([.daily[]? | select(.period|startswith($m)) | .totalCost] | add // 0),
-        week:  ([.daily[]? | select(.period >= $cut)        | .totalCost] | add // 0),
-        today: ([.daily[]? | select(.period == $td)         | .totalCost] | add // 0),
+        piMonth: $p,
         ts: $ts }' >"$CACHE.tmp" 2>/dev/null && mv "$CACHE.tmp" "$CACHE"
   }
   if _stale "$CACHE" "$REFRESH" && _stale "$LOCK" "$LOCK_TTL"; then
@@ -135,18 +158,19 @@ if [ -n "$CD" ]; then
     fi
   fi
   if [ -f "$CACHE" ]; then
-    read -r _M _W _T < <(jq -r '"\(.month // 0) \(.week // 0) \(.today // 0)"' "$CACHE" 2>/dev/null)
+    read -r _M _P < <(jq -r '"\(.month // 0) \(.piMonth // null)"' "$CACHE" 2>/dev/null)
     [[ "$_M" =~ ^[0-9.]+$ ]] && { MO=$(printf '%.0f' "$_M"); COST_OK=1; }
-    [[ "$_W" =~ ^[0-9.]+$ ]] && WK=$(printf '%.0f' "$_W")
-    [[ "$_T" =~ ^[0-9.]+$ ]] && TD=$(printf '%.0f' "$_T")
-    ((COST_OK)) && COST_PCT=$(awk -v m="$_M" -v c="$CAP" 'BEGIN{ if(c<=0){print 0} else {printf "%d", (m*100/c)} }')
+    [[ "$_P" =~ ^[0-9.]+$ ]] && { PI_MO=$(printf '%.0f' "$_P"); PI_COST_OK=1; }
+    if ((COST_OK && PI_COST_OK)); then
+      COST_PCT=$(awk -v m="$_M" -v p="$_P" -v c="$CAP" 'BEGIN{ if(c<=0){print 0} else {printf "%d", ((m+p)*100/c)} }')
+    fi
   fi
 fi
 
-# Cost color for the month figure (vs the soft cap).
+# Cost color for the combined month total against the soft cap.
 if ((COST_PCT >= 90)); then CCOL=$R; elif ((COST_PCT >= 70)); then CCOL=$Y; else CCOL=$G; fi
 
-# ── Current session cost: Claude Code's own tally from stdin
+# ── Current Claude session cost: Claude Code's own tally from stdin
 #    (cost.total_cost_usd) — exact, matches /usage, and populated even on
 #    Vertex where transcripts carry no per-message cost. ──
 SESS="0"
@@ -160,11 +184,11 @@ ROW_REPO="$L1R"
 
 # STATS: model + effort │ context bar + percentage + size │ costs.
 [ -n "$CL" ] && CTX_OF="of ${CL}" || CTX_OF=""
-if ((COST_OK)); then
-  COST="${GLD}${GMN}${N} \$${SESS} ${D}·${N} 1d \$${TD} ${D}·${N} 7d \$${WK} ${D}·${N} ${CCOL}\$${MO}${N}${D}/\$${CAP}${N}"
-else
-  COST="${GLD}${GMN}${N} \$${SESS} ${D}· computing…${N}"
+TOTAL="?"
+if ((COST_OK && PI_COST_OK)); then
+  TOTAL=$(awk -v m="$_M" -v p="$_P" 'BEGIN { printf "%.0f", m + p }')
 fi
+COST="${GLD}${GMN}${N} session \$${SESS} ${D}·${N} pi \$${PI_MO} ${D}·${N} claude \$${MO} ${D}·${N} ${CCOL}total \$${TOTAL}${N}${D}/\$${CAP}${N}"
 ROW_STATS="${MODEL} ${EF} ${D}│${N} ${BC}${GCX} ${BAR}${N} ${PCT}% ${CTX_OF} ${D}│${N} ${COST}"
 
 # Visible display width: strip ANSI (via sed — bash glob mangles multibyte).
