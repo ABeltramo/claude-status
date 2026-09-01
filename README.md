@@ -8,7 +8,7 @@ It's a single Bash script. No plugin, no marketplace, no daemon.
 ╭─ REPO ────────────────────────────────────────────────────────────────────╮
 │ claude-status  main 2f +55 -31                                            │
 ├─ SESSION ──────────────────────────────────────────────────────────────────┤
-│ Opus 4.8 (1M) medium │  ██░░░░░░░░ 22% of 1M │ 💰 session $12 · pi $7 · claude $25 · total $32/$300 │
+│ Opus 4.8 (1M) medium │  ██░░░░░░░░ 22% of 1M │ 💰 session $12.00 · pi $7.00 · claude $25.00 · total $32.00/$300.00 │
 ╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -26,8 +26,8 @@ The panel auto-sizes to its widest row, so every line and border stays aligned. 
 - A `` gauge + context-usage bar, color-coded green <70% / yellow ≥70% / red ≥90%, with `PCT% of <size>`
 - **Cost**, left to right:
   - `session $session` — this Claude session's spend (Claude Code's own tally; exact, matches `/usage`)
-  - `pi $month` — this calendar month's Pi spend from Pi session records
-  - `claude $month` — this calendar month's Claude spend from `ccusage`
+  - `pi $month` — this calendar month's Pi spend from `ccusage --by-agent`
+  - `claude $month` — this calendar month's Claude spend from `ccusage --by-agent`
   - `total $month/$cap` — combined monthly spend vs your cap, colored by % of cap
 
 ## Requirements
@@ -100,8 +100,8 @@ Example:
 
 - On every render the script reads Claude Code's statusline JSON (stdin) + your `settings.json` in one `jq` call, then draws the bordered panel. Row widths are measured with ANSI stripped (via `sed`) so the box aligns even with colors, the money emoji, and Nerd Font glyphs.
 - **Session cost** comes straight from the stdin payload (`cost.total_cost_usd`) — Claude Code's own figure, so it's exact and matches `/usage`, with no price table to maintain. It's populated even on Vertex/Bedrock, where the raw transcripts carry no per-message cost.
-- **Pi / Claude month totals** are **cached**. The script prints the last cached values instantly and, when the cache is older than ~10 min, starts a **background** refresh. The refresh uses `ccusage daily --mode calculate --json` for Claude and Pi session records for Pi. Rendering never blocks on either source.
-- Cost is computed from token counts via `ccusage` (`--mode calculate`) for Claude and recorded Pi usage for Pi, so those figures are **estimates**, not your invoice.
+- **Pi / Claude month totals** are **cached**. The script prints the last cached values instantly and, when the cache is older than ~10 min, starts a **background** refresh. The refresh uses one `ccusage daily --mode calculate --json --by-agent` call for both agents. Rendering never blocks on the refresh.
+- Cost is computed from token counts via `ccusage` (`--mode calculate`) for both agents, so those figures are **estimates**, not your invoice.
 - Git status is read directly (`--no-optional-locks`, read-only).
 - Cache lives in `${XDG_RUNTIME_DIR:-~/.cache}/claude-status/cost-cache.json` (user-owned dir only; never shared `/tmp`).
 - First render after install shows `💰 $session · computing…` until the first background refresh lands.

@@ -108,59 +108,42 @@ for BASE in "${XDG_RUNTIME_DIR:-}" "${HOME}/.cache"; do
   [ -d "$CAND" ] && [ -w "$CAND" ] || continue
   CD="$CAND"; break
 done
-CACHE="" MO="?" PI_MO="?" COST_PCT=0 COST_OK=0 PI_COST_OK=0
-
-# Sum Pi usage recorded in the current calendar month.
-_pi_month() {
-  local base month file value values
-  base="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions"
-  [ -d "$base" ] || { printf '0'; return; }
-  month=$(date +%Y-%m)
-  values=""
-  while IFS= read -r -d '' file; do
-    value=$(jq -s -r --arg m "$month" '
-      [ .[] | select(.type != "session") | select(.timestamp | startswith($m))
-        | if .type == "message" then (.message.usage.cost.total // 0)
-          elif .type == "compaction" or .type == "branch_summary" then (.usage.cost.total // 0)
-          else 0 end ] | add // 0' "$file" 2>/dev/null) || \
-    value=$(sed '$d' "$file" | jq -s -r --arg m "$month" '
-      [ .[] | select(.type != "session") | select(.timestamp | startswith($m))
-        | if .type == "message" then (.message.usage.cost.total // 0)
-          elif .type == "compaction" or .type == "branch_summary" then (.usage.cost.total // 0)
-          else 0 end ] | add // 0' 2>/dev/null) || value=0
-    [[ "$value" =~ ^[0-9.eE+-]+$ ]] || value=0
-    values="${values}${value}"$'\n'
-  done < <(find "$base" -type f -name '*.jsonl' -print0 2>/dev/null)
-  printf '%s' "$values" | awk '{ total += $1 } END { printf "%.6f", total }'
-}
+CACHE="" MO="?" PI_MO="?" COST_PCT=0 COST_OK=0 PI_COST_OK=0 CACHE_VALID=0
+MONTH=$(date +%Y-%m)
 
 if [ -n "$CD" ]; then
   CACHE="$CD/cost-cache.json"; LOCK="$CD/cost-cache.lock"
   _stale() { local f="$1" ttl="$2" mt; [ -f "$f" ] || return 0; mt=$(stat -f%m "$f" 2>/dev/null || stat -c%Y "$f" 2>/dev/null || echo 0); ((NOW - mt > ttl)); }
   _runner() { if command -v bunx >/dev/null 2>&1; then echo "bunx"; elif command -v npx >/dev/null 2>&1; then echo "npx --yes"; else return 1; fi; }
   _refresh() {
-    local run month json pi_month
+    local run month json
     run=$(_runner) || return 1
     month=$(date +%Y-%m)
-    json=$($run ccusage@latest daily --mode calculate --json 2>/dev/null) || return 1
+    json=$($run ccusage@latest daily --mode calculate --json --by-agent 2>/dev/null) || return 1
     [ -n "$json" ] || return 1
-    pi_month=$(_pi_month)
-    printf '%s' "$json" | jq -c --arg m "$month" --argjson p "$pi_month" --argjson ts "$NOW" '
-      { month: ([.daily[]? | select(.period|startswith($m)) | .totalCost] | add // 0),
-        piMonth: $p,
+    printf '%s' "$json" | jq -c --arg m "$month" --argjson ts "$NOW" '
+      { version: 3,
+        period: $m,
+        claudeMonth: ([.daily[]? | select(.period|startswith($m)) | .agents[]? | select(.agent == "claude") | .totalCost] | add // 0),
+        piMonth: ([.daily[]? | select(.period|startswith($m)) | .agents[]? | select(.agent == "pi") | .totalCost] | add // 0),
         ts: $ts }' >"$CACHE.tmp" 2>/dev/null && mv "$CACHE.tmp" "$CACHE"
   }
-  if _stale "$CACHE" "$REFRESH" && _stale "$LOCK" "$LOCK_TTL"; then
+  if [ -f "$CACHE" ] &&
+     [ "$(jq -r '.version // 0' "$CACHE" 2>/dev/null)" = "3" ] &&
+     [ "$(jq -r '.period // empty' "$CACHE" 2>/dev/null)" = "$MONTH" ]; then
+    CACHE_VALID=1
+  fi
+  if { ((CACHE_VALID == 0)) || _stale "$CACHE" "$REFRESH"; } && _stale "$LOCK" "$LOCK_TTL"; then
     rmdir "$LOCK" 2>/dev/null   # reclaim a lock orphaned by a crashed/interrupted refresh
     if mkdir "$LOCK" 2>/dev/null; then
       ( _refresh; rmdir "$LOCK" 2>/dev/null ) >/dev/null 2>&1 &
       disown 2>/dev/null || true
     fi
   fi
-  if [ -f "$CACHE" ]; then
-    read -r _M _P < <(jq -r '"\(.month // 0) \(.piMonth // null)"' "$CACHE" 2>/dev/null)
-    [[ "$_M" =~ ^[0-9.]+$ ]] && { MO=$(printf '%.0f' "$_M"); COST_OK=1; }
-    [[ "$_P" =~ ^[0-9.]+$ ]] && { PI_MO=$(printf '%.0f' "$_P"); PI_COST_OK=1; }
+  if [ -f "$CACHE" ] && ((CACHE_VALID)); then
+    read -r _M _P < <(jq -r '"\(.claudeMonth // null) \(.piMonth // null)"' "$CACHE" 2>/dev/null)
+    [[ "$_M" =~ ^[0-9.]+$ ]] && { MO=$(printf '%.2f' "$_M"); COST_OK=1; }
+    [[ "$_P" =~ ^[0-9.]+$ ]] && { PI_MO=$(printf '%.2f' "$_P"); PI_COST_OK=1; }
     if ((COST_OK && PI_COST_OK)); then
       COST_PCT=$(awk -v m="$_M" -v p="$_P" -v c="$CAP" 'BEGIN{ if(c<=0){print 0} else {printf "%d", ((m+p)*100/c)} }')
     fi
@@ -173,8 +156,9 @@ if ((COST_PCT >= 90)); then CCOL=$R; elif ((COST_PCT >= 70)); then CCOL=$Y; else
 # ── Current Claude session cost: Claude Code's own tally from stdin
 #    (cost.total_cost_usd) — exact, matches /usage, and populated even on
 #    Vertex where transcripts carry no per-message cost. ──
-SESS="0"
-[[ "$CCOST" =~ ^[0-9]+(\.[0-9]+)?$ ]] && SESS=$(printf '%.0f' "$CCOST")
+SESS="0.00"
+[[ "$CCOST" =~ ^[0-9]+(\.[0-9]+)?$ ]] && SESS=$(printf '%.2f' "$CCOST")
+CAP_DISPLAY=$(printf '%.2f' "$CAP")
 
 # ── Bordered panel (REPO / STATS) ──
 BD=$'\033[37m'   # border + title color (plain white)
@@ -186,9 +170,9 @@ ROW_REPO="$L1R"
 [ -n "$CL" ] && CTX_OF="of ${CL}" || CTX_OF=""
 TOTAL="?"
 if ((COST_OK && PI_COST_OK)); then
-  TOTAL=$(awk -v m="$_M" -v p="$_P" 'BEGIN { printf "%.0f", m + p }')
+  TOTAL=$(awk -v m="$_M" -v p="$_P" 'BEGIN { printf "%.2f", m + p }')
 fi
-COST="${GLD}${GMN}${N} session \$${SESS} ${D}·${N} pi \$${PI_MO} ${D}·${N} claude \$${MO} ${D}·${N} ${CCOL}total \$${TOTAL}${N}${D}/\$${CAP}${N}"
+COST="${GLD}${GMN}${N} session \$${SESS} ${D}·${N} pi \$${PI_MO} ${D}·${N} claude \$${MO} ${D}·${N} ${CCOL}total \$${TOTAL}${N}${D}/\$${CAP_DISPLAY}${N}"
 ROW_STATS="${MODEL} ${EF} ${D}│${N} ${BC}${GCX} ${BAR}${N} ${PCT}% ${CTX_OF} ${D}│${N} ${COST}"
 
 # Visible display width: strip ANSI (via sed — bash glob mangles multibyte).
